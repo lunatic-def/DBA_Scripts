@@ -1,0 +1,653 @@
+init_config:
+instances:
+  - dbm: true
+    host: "SQLPRODACURITY,50302"
+    connection_string: "Integrated Security=SSPI;Trust Server Certificate=True;Use Encryption for Data=False;"
+    connector: adodbapi
+    adoprovider: SQLOLEDB
+    reported_hostname: prod-acurity
+    include_ao_metrics: true # Optional: For AlwaysOn users
+    agent_jobs: # Optional: For monitoring SQL Server Agent jobs
+      enabled: true
+      collection_interval: 300
+      history_row_limit: 10000
+    database_autodiscovery: true
+    collect_deadlocks:
+      enabled: true
+      collection_interval: 600
+      max_deadlocks: 100
+    collect_schemas:
+      enabled: true
+    include_index_usage_metrics: true
+    custom_queries:      
+      - query: "EXEC [AcurityDB].[dbo].[DBMAgent_GetJobsCompleted] 60, 10000;"
+        columns:
+          - name: "database.acuritydb.dbo.batch"
+            type: tag
+          - name: "database.acuritydb.dbo.division"
+            type: tag
+          - name: "database.acuritydb.dbo.fund"
+            type: tag
+          - name: "database.acuritydb.dbo.server"
+            type: tag
+          - name: "database.acuritydb.dbo.report"
+            type: tag
+          - name: "database.acuritydb.dbo.jobsrun"
+            type: count
+          - name: "database.acuritydb.dbo.jobstotalms"
+            type: count
+          - name: "database.acuritydb.dbo.jobsavgms"
+            type: count
+          - name: "database.acuritydb.dbo.jobsminms"
+            type: count
+          - name: "database.acuritydb.dbo.jobsmaxms"
+            type: count
+        tags:
+          - "custom_query:health_check"
+        collection_interval: 60 #seconds
+      - query: |
+          SELECT
+            @@SERVERNAME AS sql_instance,
+            MAX(CASE WHEN counter_name = 'Transactions/sec'            AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS transactions_sec_raw,
+            MAX(CASE WHEN counter_name = 'Batch Requests/sec'          AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS batch_requests_sec_raw,
+            MAX(CASE WHEN counter_name = 'Lock Requests/sec'           AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS lock_requests_sec_raw,
+            MAX(CASE WHEN counter_name = 'Lock Timeouts/sec'           AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS lock_timeouts_sec_raw,
+            MAX(CASE WHEN counter_name = 'Lock Waits/sec'              AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS lock_waits_sec_raw,
+            MAX(CASE WHEN counter_name = 'Number of Deadlocks/sec'     AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS deadlocks_sec_raw,
+            MAX(CASE WHEN counter_name = 'Log Flushes/sec'             AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS log_flushes_sec_raw,
+            MAX(CASE WHEN counter_name = 'Log Bytes Flushed/sec'       AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS log_bytes_flushed_sec_raw,
+            MAX(CASE WHEN counter_name = 'Active Transactions'         AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS active_transactions,
+            MAX(CASE WHEN counter_name = 'SQL Cache Memory (KB)'       AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS sql_cache_memory_kb,
+            MAX(CASE WHEN counter_name = 'User Connections'            AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS user_connections,
+            MAX(CASE WHEN counter_name = 'Page life expectancy'        AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS page_life_expectancy,
+            MAX(CASE WHEN counter_name = 'Database pages'              AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS database_pages
+          FROM sys.dm_os_performance_counters
+          WHERE counter_name IN
+          (
+            'Transactions/sec',
+            'Batch Requests/sec',
+            'Lock Requests/sec',
+            'Lock Timeouts/sec',
+            'Lock Waits/sec',
+            'Number of Deadlocks/sec',
+            'Log Flushes/sec',
+            'Log Bytes Flushed/sec',
+            'Active Transactions',
+            'SQL Cache Memory (KB)',
+            'User Connections',
+            'Page life expectancy',
+            'Database pages'
+          );
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.transactions
+            type: rate
+          - name: dbmonitor.batch_requests
+            type: rate
+          - name: dbmonitor.lock_requests
+            type: rate
+          - name: dbmonitor.lock_timeouts
+            type: rate
+          - name: dbmonitor.lock_waits
+            type: rate
+          - name: dbmonitor.deadlocks
+            type: rate
+          - name: dbmonitor.log_flushes
+            type: rate
+          - name: dbmonitor.log_bytes_flushed
+            type: rate
+          - name: dbmonitor.active_transactions
+            type: gauge
+          - name: dbmonitor.sql_cache_memory_kb
+            type: gauge
+          - name: dbmonitor.user_connections
+            type: gauge
+          - name: dbmonitor.page_life_expectancy
+            type: gauge
+          - name: dbmonitor.database_pages
+            type: gauge
+        tags:
+          - 'custom_query:dbmonitor_perf'
+      - query: |
+          SELECT
+            @@SERVERNAME AS sql_instance,
+            MAX(CASE WHEN wait_type = 'WRITELOG'         THEN wait_time_ms ELSE 0 END) AS writelog_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'LCK_M_X'          THEN wait_time_ms ELSE 0 END) AS lck_m_x_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'PAGELATCH_EX'     THEN wait_time_ms ELSE 0 END) AS pagelatch_ex_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'PAGELATCH_SH'     THEN wait_time_ms ELSE 0 END) AS pagelatch_sh_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'CXPACKET'         THEN wait_time_ms ELSE 0 END) AS cxpacket_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'CXCONSUMER'       THEN wait_time_ms ELSE 0 END) AS cxconsumer_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'ASYNC_NETWORK_IO' THEN wait_time_ms ELSE 0 END) AS async_network_io_wait_ms_raw
+          FROM sys.dm_os_wait_stats
+          WHERE wait_type IN
+          (
+            'WRITELOG',
+            'LCK_M_X',
+            'PAGELATCH_EX',
+            'PAGELATCH_SH',
+            'CXPACKET',
+            'CXCONSUMER',
+            'ASYNC_NETWORK_IO'
+          );
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.waits.writelog_ms
+            type: rate
+          - name: dbmonitor.waits.lck_m_x_ms
+            type: rate
+          - name: dbmonitor.waits.pagelatch_ex_ms
+            type: rate
+          - name: dbmonitor.waits.pagelatch_sh_ms
+            type: rate
+          - name: dbmonitor.waits.cxpacket_ms
+            type: rate
+          - name: dbmonitor.waits.cxconsumer_ms
+            type: rate
+          - name: dbmonitor.waits.async_network_io_ms
+            type: rate
+        tags:
+          - 'custom_query:dbmonitor_waits'
+        collection_interval: 5 #seconds
+      - query: |
+          WITH latest_cpu AS
+            (
+              SELECT TOP (1) 
+                CAST(rb.record AS XML) AS record_xml,  
+                (SELECT TOP 1 cpu_count FROM sys.dm_os_sys_info) AS CPUs
+              FROM sys.dm_os_ring_buffers AS rb
+              WHERE rb.ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'
+                AND rb.record LIKE N'%<SystemHealth>%'
+              ORDER BY rb.timestamp DESC
+            )
+            SELECT
+              @@SERVERNAME AS sql_instance,
+              latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') 
+              / CASE WHEN CPUs > 64 THEN 4 ELSE 1 END AS sql_cpu_percent,
+              latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') AS system_idle_percent,
+              100
+                - (latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') / CASE WHEN CPUs > 64 THEN 4 ELSE 1 END)
+                - latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') AS other_process_cpu_percent
+            FROM latest_cpu;
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.cpu.sql_cpu_percent
+            type: gauge
+          - name: dbmonitor.cpu.system_idle_percent
+            type: gauge
+          - name: dbmonitor.cpu.other_process_cpu_percent
+            type: gauge
+        tags:
+          - 'custom_query:dbmonitor_cpu'
+        collection_interval: 5 #seconds
+      - query: |
+          SELECT
+            @@SERVERNAME AS sql_instance,
+            SUM(runnable_tasks_count) AS runnable_tasks_count,
+            SUM(current_tasks_count) AS current_tasks_count,
+            SUM(active_workers_count) AS active_workers_count,
+            SUM(work_queue_count) AS work_queue_count,
+            SUM(pending_disk_io_count) AS pending_disk_io_count
+          FROM sys.dm_os_schedulers
+          WHERE status = 'VISIBLE ONLINE';
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.cpu.runnable_tasks_count
+            type: gauge
+          - name: dbmonitor.cpu.current_tasks_count
+            type: gauge
+          - name: dbmonitor.cpu.active_workers_count
+            type: gauge
+          - name: dbmonitor.cpu.work_queue_count
+            type: gauge
+          - name: dbmonitor.cpu.pending_disk_io_count
+            type: gauge
+        tags:
+          - 'custom_query:dbmonitor_cpu'
+        collection_interval: 5 #seconds
+    tags:  # Optional
+    #   - 'service:<CUSTOM_SERVICE>'
+      - 'env:prod'
+
+  - dbm: true
+    host: "SQLPRODNWDB,50384"
+    connection_string: "Trust Server Certificate=True;Use Encryption for Data=False;"
+    connector: adodbapi
+    adoprovider: SQLOLEDB
+    reported_hostname: prod-nwdb
+    include_ao_metrics: true # Optional: For AlwaysOn users
+    agent_jobs: # Optional: For monitoring SQL Server Agent jobs
+      enabled: true
+      collection_interval: 300
+      history_row_limit: 10000
+    database_autodiscovery: true
+    collect_deadlocks:
+      enabled: true
+      collection_interval: 600
+      max_deadlocks: 100
+    collect_schemas:
+      enabled: true
+    include_index_usage_metrics: true
+    custom_queries:
+      - query: EXEC [Netwealth].[dbo].[AsyncRequestQueueCountPendingByPollingPeriod] 1;
+        columns:
+          - name: database.netwealth.queue.name
+            type: tag
+          - name: database.netwealth.queue.service
+            type: tag
+          - name: database.netwealth.queue.request_type
+            type: tag
+          - name: database.netwealth.queue.pending_type
+            type: tag
+          - name: database.netwealth.queue.pending
+            type: count
+        tags:
+          - 'custom_query:health_check'
+        collection_interval: 60 #seconds
+      - query: EXEC [Netwealth].[dbo].[AsyncRequestQueueCountProcessing];
+        columns:
+          - name: database.netwealth.queue.name
+            type: tag
+          - name: database.netwealth.queue.service
+            type: tag
+          - name: database.netwealth.queue.request_type
+            type: tag
+          - name: database.netwealth.queue.processing
+            type: count
+        tags:
+          - 'custom_query:health_check'
+        collection_interval: 60 #seconds
+      - query: |
+          SELECT
+            @@SERVERNAME AS sql_instance,
+            MAX(CASE WHEN counter_name = 'Transactions/sec'            AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS transactions_sec_raw,
+            MAX(CASE WHEN counter_name = 'Batch Requests/sec'          AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS batch_requests_sec_raw,
+            MAX(CASE WHEN counter_name = 'Lock Requests/sec'           AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS lock_requests_sec_raw,
+            MAX(CASE WHEN counter_name = 'Lock Timeouts/sec'           AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS lock_timeouts_sec_raw,
+            MAX(CASE WHEN counter_name = 'Lock Waits/sec'              AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS lock_waits_sec_raw,
+            MAX(CASE WHEN counter_name = 'Number of Deadlocks/sec'     AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS deadlocks_sec_raw,
+            MAX(CASE WHEN counter_name = 'Log Flushes/sec'             AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS log_flushes_sec_raw,
+            MAX(CASE WHEN counter_name = 'Log Bytes Flushed/sec'       AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS log_bytes_flushed_sec_raw,
+            MAX(CASE WHEN counter_name = 'Active Transactions'         AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS active_transactions,
+            MAX(CASE WHEN counter_name = 'SQL Cache Memory (KB)'       AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS sql_cache_memory_kb,
+            MAX(CASE WHEN counter_name = 'User Connections'            AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS user_connections,
+            MAX(CASE WHEN counter_name = 'Page life expectancy'        AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS page_life_expectancy,
+            MAX(CASE WHEN counter_name = 'Database pages'              AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS database_pages
+          FROM sys.dm_os_performance_counters
+          WHERE counter_name IN
+          (
+            'Transactions/sec',
+            'Batch Requests/sec',
+            'Lock Requests/sec',
+            'Lock Timeouts/sec',
+            'Lock Waits/sec',
+            'Number of Deadlocks/sec',
+            'Log Flushes/sec',
+            'Log Bytes Flushed/sec',
+            'Active Transactions',
+            'SQL Cache Memory (KB)',
+            'User Connections',
+            'Page life expectancy',
+            'Database pages'
+          );
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.transactions
+            type: rate
+          - name: dbmonitor.batch_requests
+            type: rate
+          - name: dbmonitor.lock_requests
+            type: rate
+          - name: dbmonitor.lock_timeouts
+            type: rate
+          - name: dbmonitor.lock_waits
+            type: rate
+          - name: dbmonitor.deadlocks
+            type: rate
+          - name: dbmonitor.log_flushes
+            type: rate
+          - name: dbmonitor.log_bytes_flushed
+            type: rate
+          - name: dbmonitor.active_transactions
+            type: gauge
+          - name: dbmonitor.sql_cache_memory_kb
+            type: gauge
+          - name: dbmonitor.user_connections
+            type: gauge
+          - name: dbmonitor.page_life_expectancy
+            type: gauge
+          - name: dbmonitor.database_pages
+            type: gauge
+        tags:
+          - 'custom_query:dbmonitor_perf'
+      - query: |
+          SELECT
+            @@SERVERNAME AS sql_instance,
+            MAX(CASE WHEN wait_type = 'WRITELOG'         THEN wait_time_ms ELSE 0 END) AS writelog_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'LCK_M_X'          THEN wait_time_ms ELSE 0 END) AS lck_m_x_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'PAGELATCH_EX'     THEN wait_time_ms ELSE 0 END) AS pagelatch_ex_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'PAGELATCH_SH'     THEN wait_time_ms ELSE 0 END) AS pagelatch_sh_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'CXPACKET'         THEN wait_time_ms ELSE 0 END) AS cxpacket_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'CXCONSUMER'       THEN wait_time_ms ELSE 0 END) AS cxconsumer_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'ASYNC_NETWORK_IO' THEN wait_time_ms ELSE 0 END) AS async_network_io_wait_ms_raw
+          FROM sys.dm_os_wait_stats
+          WHERE wait_type IN
+          (
+            'WRITELOG',
+            'LCK_M_X',
+            'PAGELATCH_EX',
+            'PAGELATCH_SH',
+            'CXPACKET',
+            'CXCONSUMER',
+            'ASYNC_NETWORK_IO'
+          );
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.waits.writelog_ms
+            type: rate
+          - name: dbmonitor.waits.lck_m_x_ms
+            type: rate
+          - name: dbmonitor.waits.pagelatch_ex_ms
+            type: rate
+          - name: dbmonitor.waits.pagelatch_sh_ms
+            type: rate
+          - name: dbmonitor.waits.cxpacket_ms
+            type: rate
+          - name: dbmonitor.waits.cxconsumer_ms
+            type: rate
+          - name: dbmonitor.waits.async_network_io_ms
+            type: rate
+        tags:
+          - 'custom_query:dbmonitor_waits'
+        collection_interval: 5 #seconds
+      - query: |
+          WITH latest_cpu AS
+            (
+              SELECT TOP (1) 
+                CAST(rb.record AS XML) AS record_xml,  
+                (SELECT TOP 1 cpu_count FROM sys.dm_os_sys_info) AS CPUs
+              FROM sys.dm_os_ring_buffers AS rb
+              WHERE rb.ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'
+                AND rb.record LIKE N'%<SystemHealth>%'
+              ORDER BY rb.timestamp DESC
+            )
+            SELECT
+              @@SERVERNAME AS sql_instance,
+              latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') 
+              / CASE WHEN CPUs > 64 THEN 4 ELSE 1 END AS sql_cpu_percent,
+              latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') AS system_idle_percent,
+              100
+                - (latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') / CASE WHEN CPUs > 64 THEN 4 ELSE 1 END)
+                - latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') AS other_process_cpu_percent
+            FROM latest_cpu;
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.cpu.sql_cpu_percent
+            type: gauge
+          - name: dbmonitor.cpu.system_idle_percent
+            type: gauge
+          - name: dbmonitor.cpu.other_process_cpu_percent
+            type: gauge
+        tags:
+          - 'custom_query:dbmonitor_cpu'
+        collection_interval: 5 #seconds
+      - query: |
+          SELECT
+            @@SERVERNAME AS sql_instance,
+            SUM(runnable_tasks_count) AS runnable_tasks_count,
+            SUM(current_tasks_count) AS current_tasks_count,
+            SUM(active_workers_count) AS active_workers_count,
+            SUM(work_queue_count) AS work_queue_count,
+            SUM(pending_disk_io_count) AS pending_disk_io_count
+          FROM sys.dm_os_schedulers
+          WHERE status = 'VISIBLE ONLINE';
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.cpu.runnable_tasks_count
+            type: gauge
+          - name: dbmonitor.cpu.current_tasks_count
+            type: gauge
+          - name: dbmonitor.cpu.active_workers_count
+            type: gauge
+          - name: dbmonitor.cpu.work_queue_count
+            type: gauge
+          - name: dbmonitor.cpu.pending_disk_io_count
+            type: gauge
+        tags:
+          - 'custom_query:dbmonitor_cpu'
+        collection_interval: 5 #seconds
+    tags:  # Optional
+    #   - 'service:<CUSTOM_SERVICE>'
+      - 'env:prod'
+
+  - dbm: true
+    host: "SQLPRODREPL,50510"
+    connection_string: "Trust Server Certificate=True;Use Encryption for Data=False;"
+    connector: adodbapi
+    adoprovider: SQLOLEDB
+    reported_hostname: prod-repl
+    include_ao_metrics: true # Optional: For AlwaysOn users
+    agent_jobs: # Optional: For monitoring SQL Server Agent jobs
+      enabled: true
+      collection_interval: 300
+      history_row_limit: 10000
+    database_autodiscovery: true
+    collect_deadlocks:
+      enabled: true
+      collection_interval: 600
+      max_deadlocks: 100
+    collect_schemas:
+      enabled: true
+    include_index_usage_metrics: true
+    custom_queries:
+      - query: "EXEC [AcurityReplica].[dbo].[CDC_GetLatencyDBM];"
+        columns:
+          - name: "database.acurityreplica.cdc.latency"
+            type: gauge
+        tags:
+          - "custom_query:health_check"
+      - query: "EXEC [AcurityReplica].[dbo].[REPL_GetLatencyDBM];"
+        columns:
+          - name: "database.acurityreplica.repl.latency"
+            type: gauge
+        tags:
+          - "custom_query:health_check"
+      - query: EXEC [AcurityReplica].[dbo].[CDC_GetRecentCDCStatsByLookbackPeriod] 2;
+        columns:
+          - name: database.acurityreplica.cdc.capture_instance
+            type: tag
+          - name: database.acurityreplica.cdc.delete
+            type: count
+          - name: database.acurityreplica.cdc.insert
+            type: count
+          - name: database.acurityreplica.cdc.update
+            type: count
+          - name: database.acurityreplica.cdc.total_commands
+            type: count
+        tags:
+          - 'custom_query:health_check'
+        collection_interval: 60 #seconds
+      - query: EXEC [dbAdmin].[repl].[GetRecentArticleCommandCount] 2;
+        columns:
+          - name: database.acurityreplica.repl.article_name
+            type: tag
+          - name: database.acurityreplica.repl.transactions
+            type: count
+          - name: database.acurityreplica.repl.commands
+            type: count
+        tags:
+          - 'custom_query:health_check'
+        collection_interval: 60 #seconds
+      - query: |
+          SELECT
+            @@SERVERNAME AS sql_instance,
+            MAX(CASE WHEN counter_name = 'Transactions/sec'            AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS transactions_sec_raw,
+            MAX(CASE WHEN counter_name = 'Batch Requests/sec'          AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS batch_requests_sec_raw,
+            MAX(CASE WHEN counter_name = 'Lock Requests/sec'           AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS lock_requests_sec_raw,
+            MAX(CASE WHEN counter_name = 'Lock Timeouts/sec'           AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS lock_timeouts_sec_raw,
+            MAX(CASE WHEN counter_name = 'Lock Waits/sec'              AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS lock_waits_sec_raw,
+            MAX(CASE WHEN counter_name = 'Number of Deadlocks/sec'     AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS deadlocks_sec_raw,
+            MAX(CASE WHEN counter_name = 'Log Flushes/sec'             AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS log_flushes_sec_raw,
+            MAX(CASE WHEN counter_name = 'Log Bytes Flushed/sec'       AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS log_bytes_flushed_sec_raw,
+            MAX(CASE WHEN counter_name = 'Active Transactions'         AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS active_transactions,
+            MAX(CASE WHEN counter_name = 'SQL Cache Memory (KB)'       AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS sql_cache_memory_kb,
+            MAX(CASE WHEN counter_name = 'User Connections'            AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS user_connections,
+            MAX(CASE WHEN counter_name = 'Page life expectancy'        AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS page_life_expectancy,
+            MAX(CASE WHEN counter_name = 'Database pages'              AND instance_name IN ('_Total','') THEN cntr_value ELSE 0 END) AS database_pages
+          FROM sys.dm_os_performance_counters
+          WHERE counter_name IN
+          (
+            'Transactions/sec',
+            'Batch Requests/sec',
+            'Lock Requests/sec',
+            'Lock Timeouts/sec',
+            'Lock Waits/sec',
+            'Number of Deadlocks/sec',
+            'Log Flushes/sec',
+            'Log Bytes Flushed/sec',
+            'Active Transactions',
+            'SQL Cache Memory (KB)',
+            'User Connections',
+            'Page life expectancy',
+            'Database pages'
+          );
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.transactions
+            type: rate
+          - name: dbmonitor.batch_requests
+            type: rate
+          - name: dbmonitor.lock_requests
+            type: rate
+          - name: dbmonitor.lock_timeouts
+            type: rate
+          - name: dbmonitor.lock_waits
+            type: rate
+          - name: dbmonitor.deadlocks
+            type: rate
+          - name: dbmonitor.log_flushes
+            type: rate
+          - name: dbmonitor.log_bytes_flushed
+            type: rate
+          - name: dbmonitor.active_transactions
+            type: gauge
+          - name: dbmonitor.sql_cache_memory_kb
+            type: gauge
+          - name: dbmonitor.user_connections
+            type: gauge
+          - name: dbmonitor.page_life_expectancy
+            type: gauge
+          - name: dbmonitor.database_pages
+            type: gauge
+        tags:
+          - 'custom_query:dbmonitor_perf'
+      - query: |
+          SELECT
+            @@SERVERNAME AS sql_instance,
+            MAX(CASE WHEN wait_type = 'WRITELOG'         THEN wait_time_ms ELSE 0 END) AS writelog_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'LCK_M_X'          THEN wait_time_ms ELSE 0 END) AS lck_m_x_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'PAGELATCH_EX'     THEN wait_time_ms ELSE 0 END) AS pagelatch_ex_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'PAGELATCH_SH'     THEN wait_time_ms ELSE 0 END) AS pagelatch_sh_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'CXPACKET'         THEN wait_time_ms ELSE 0 END) AS cxpacket_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'CXCONSUMER'       THEN wait_time_ms ELSE 0 END) AS cxconsumer_wait_ms_raw,
+            MAX(CASE WHEN wait_type = 'ASYNC_NETWORK_IO' THEN wait_time_ms ELSE 0 END) AS async_network_io_wait_ms_raw
+          FROM sys.dm_os_wait_stats
+          WHERE wait_type IN
+          (
+            'WRITELOG',
+            'LCK_M_X',
+            'PAGELATCH_EX',
+            'PAGELATCH_SH',
+            'CXPACKET',
+            'CXCONSUMER',
+            'ASYNC_NETWORK_IO'
+          );
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.waits.writelog_ms
+            type: rate
+          - name: dbmonitor.waits.lck_m_x_ms
+            type: rate
+          - name: dbmonitor.waits.pagelatch_ex_ms
+            type: rate
+          - name: dbmonitor.waits.pagelatch_sh_ms
+            type: rate
+          - name: dbmonitor.waits.cxpacket_ms
+            type: rate
+          - name: dbmonitor.waits.cxconsumer_ms
+            type: rate
+          - name: dbmonitor.waits.async_network_io_ms
+            type: rate
+        tags:
+          - 'custom_query:dbmonitor_waits'
+        collection_interval: 5 #seconds
+      - query: |
+          WITH latest_cpu AS
+            (
+              SELECT TOP (1) 
+                CAST(rb.record AS XML) AS record_xml,  
+                (SELECT TOP 1 cpu_count FROM sys.dm_os_sys_info) AS CPUs
+              FROM sys.dm_os_ring_buffers AS rb
+              WHERE rb.ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'
+                AND rb.record LIKE N'%<SystemHealth>%'
+              ORDER BY rb.timestamp DESC
+            )
+            SELECT
+              @@SERVERNAME AS sql_instance,
+              latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') 
+              / CASE WHEN CPUs > 64 THEN 4 ELSE 1 END AS sql_cpu_percent,
+              latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') AS system_idle_percent,
+              100
+                - (latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') / CASE WHEN CPUs > 64 THEN 4 ELSE 1 END)
+                - latest_cpu.record_xml.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') AS other_process_cpu_percent
+            FROM latest_cpu;
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.cpu.sql_cpu_percent
+            type: gauge
+          - name: dbmonitor.cpu.system_idle_percent
+            type: gauge
+          - name: dbmonitor.cpu.other_process_cpu_percent
+            type: gauge
+        tags:
+          - 'custom_query:dbmonitor_cpu'
+        collection_interval: 5 #seconds
+      - query: |
+          SELECT
+            @@SERVERNAME AS sql_instance,
+            SUM(runnable_tasks_count) AS runnable_tasks_count,
+            SUM(current_tasks_count) AS current_tasks_count,
+            SUM(active_workers_count) AS active_workers_count,
+            SUM(work_queue_count) AS work_queue_count,
+            SUM(pending_disk_io_count) AS pending_disk_io_count
+          FROM sys.dm_os_schedulers
+          WHERE status = 'VISIBLE ONLINE';
+        columns:
+          - name: sql_instance
+            type: tag
+          - name: dbmonitor.cpu.runnable_tasks_count
+            type: gauge
+          - name: dbmonitor.cpu.current_tasks_count
+            type: gauge
+          - name: dbmonitor.cpu.active_workers_count
+            type: gauge
+          - name: dbmonitor.cpu.work_queue_count
+            type: gauge
+          - name: dbmonitor.cpu.pending_disk_io_count
+            type: gauge
+        tags:
+          - 'custom_query:dbmonitor_cpu'
+        collection_interval: 5 #seconds
+    tags:  # Optional
+    #   - 'service:<CUSTOM_SERVICE>'
+      - 'env:prod'
