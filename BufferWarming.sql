@@ -93,20 +93,65 @@ iii.	Table size is > 50% - Red (Do not warm the whole table -> change to warming
 2. How to know whether the table has been successfully load to buffer ?
 3. Monitoring and metric best suit ?
 
+--- Begining for script
+
+-- Make sqlcmd/SSMS stop on the first T-SQL error we THROW
+:ON ERROR EXIT
+SET NOCOUNT ON;
+
+-- list of tables need to be warm
+DECLARE @AcurityTables TABLE (
+    TableName NVARCHAR(128)
+);
+
+INSERT @AcurityTables (TableName)
+VALUES
+    ('General_Ledger'),
+    ('Transaction_History'),
+    ('Transaction_Lines'),
+    ('Unpost_Gen_Ledger'),
+    ('Tran_04_History'),
+    ('Share_Certificate'),
+    ('Batches_Processed');
 
 
+-- check to see whether the server is Primary or Not 
+-- If the DB is locally joined (previous run), take it out ONLY if this node is SECONDARY
+DECLARE @LocalRole NVARCHAR(60) =
+    (SELECT TOP(1) rs.role_desc
+     FROM sys.availability_groups ag
+     JOIN sys.dm_hadr_availability_replica_states rs
+       ON ag.group_id = rs.group_id AND rs.is_local = 1
+     WHERE ag.name = @AGName);
 
+DECLARE @IsLocalPrimary BIT = CASE WHEN @LocalRole = 'PRIMARY' THEN 1 ELSE 0 END;
 
+DECLARE @IsDbJoinedLocally BIT =
+    (
+        SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM sys.dm_hadr_database_replica_states drs
+            JOIN sys.databases d ON drs.database_id = d.database_id
+            WHERE d.name = @db AND drs.is_local = 1
+        ) THEN 1 ELSE 0 END
+    );
 
+-- Check is see whether the sql server has been restarted on not in 24hours 
+DECLARE @IsRestartedIn24Hours BIT = 
+    (
+        SELECT CASE WHEN EXISTS (
+            SELECT 1 
+            FROM sys.dm_os_sys_info
+            WHERE sqlserver_start_time >= DATEADD(HOUR, -24, GETDATE())
+        ) THEN 1 ELSE 0 END
+    ) 
 
+IF @IsDbJoinedLocally = 1 AND @IsRestartedIn24Hours = 1
+BEGIN
+    PRINT 'Database is primary and has been restarted in the last 24hours'
 
-General_Ledger
-Transaction_History
-Transaction_Lines
-Unpost_Gen_Ledger
-Tran_04_History
-Share_Certificate
-Batches_Processed
+END
+
 
 
 
