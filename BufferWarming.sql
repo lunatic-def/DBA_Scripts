@@ -57,5 +57,56 @@ ORDER BY COUNT(*) DESC;
 
 --- split out data by index, instead of table providing even further granularity on buffer cache usage 
 
+sys.dm_os_buffer_descriptors: 
+-	Determine the distribution of data pages in the buffer pool according to database, object or type
+-	When a data page is read from disk, the page is copied into the SQL Server buffer pool and cached for reuse
+-	Return cached pages for all user and system databases
+Data: 
+allocation_unit_id: ID of the allocation unit of the page. This value can be used to join sys.allocation_units. Is nullable.
+read_microsec: The actual time (in microseconds) required to read the page into the buffer. This number is reset when the buffer is reused. Is nullable.
+Find out: Count number of cached page 
+
+
+agent jobs on a 2am 
+first thing: 
+whether the server is primary or not ?
+	whether the instance has been restart or not in 24hours 
+-> if yes then run the commands 
+
+query command on the database show which table is using up most of memory - but it need to scan the table to query( Should not be run in business tables) 
+-> figure out which tables 
+-> should be after restarted (pointless) 
+select big count - use top 5 
+
+
+questions:
+1.	How to proper load the table into buffer ?
+2.	How to load the table into buffer without causing high load and blocking or wait event ? Resource Governance ? No Lock ? Indexing ? Prio adjustment ? Prevent CPU throttling ? Primary key ?
+3.	Checking the current total memory the table is being load into the server atm. (time range for data for the past 1 week maybe ?)
+a.	Go/No Go decision matrix
+i.	Table size is less than 10% to 15% of your total buffer pool – Green (Can go batched memory warming)
+ii.	Table size is from 20% to 40% of buffer pool – Yellow (Run script slowly)
+iii.	Table size is > 50% - Red (Do not warm the whole table -> change to warming the index)
+4.	Non-cluster index instead of the cluster index ?
+5.	How to prevent page life expectancy plummet – measure how long the data page stays in memory before it’s kicked out 
+6.	Should it be after every restart or only in maintenance mode to prevent unwanted incident ?
+2. How to know whether the table has been successfully load to buffer ?
+3. Monitoring and metric best suit ?
+
+
+
+
+
+
+
+
+General_Ledger
+Transaction_History
+Transaction_Lines
+Unpost_Gen_Ledger
+Tran_04_History
+Share_Certificate
+Batches_Processed
+
 
 
