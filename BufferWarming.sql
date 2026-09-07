@@ -96,6 +96,22 @@ iii.	Table size is > 50% - Red (Do not warm the whole table -> change to warming
 --- Begining for script
 
 -- Make sqlcmd/SSMS stop on the first T-SQL error we THROW
+-- Table Hint -> https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table?view=sql-server-ver17
+
+
+/*
+Buffer warming technique
+
+Using index ID 0 (Heap) or 1 (Cluster Index) and NOLOCK to force the server to read the 
+actual data page into buffer pool
+Assign COUNT_BIG(*) 0 to prevent data is sent to the network
+
+Prio-check 
+- Size limit check - Should not load the whole table 
+- Current PLE check - whether the servre is under memory pressure  
+- Already Warmed check - If the buffer is already warm this should be skipped to prevent creating more load
+*/
+
 :ON ERROR EXIT
 SET NOCOUNT ON;
 
@@ -149,8 +165,141 @@ DECLARE @IsRestartedIn24Hours BIT =
 IF @IsDbJoinedLocally = 1 AND @IsRestartedIn24Hours = 1
 BEGIN
     PRINT 'Database is primary and has been restarted in the last 24hours'
+    DECLARE cur_Warming CURSOR LOCAL FAST_FORWARD FOR
+        SELECT 
+            at.TableName, 
+            i.index_id
+        FROM @AcurityTables at
+        JOIN sys.tables t ON at.TableName = t.name
+        JOIN sys.indexes i ON t.object_id = i.object_id
+        WHERE i.type IN (0, 1); -- Only get the base table data pages
 
+    OPEN cur_Warming;
+    FETCH NEXT FROM cur_Warming INTO @TableName, @IndexId;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        -- 3. Build the dynamic SQL
+        -- DECLARE @Dummy prevents data from being sent to the SSMS grid.
+        -- WITH (NOLOCK) prevents blocking active users while warming.
+        -- INDEX(@IndexId) forces it to read the actual table data, not a tiny non-clustered index.
+
+        SET @Sql = N'DECLARE @Dummy BIGINT; ' + 
+                   N'SELECT @Dummy = COUNT_BIG(*) ' + 
+                   N'FROM [' + @TableName + '] WITH (NOLOCK, INDEX(' + CAST(@IndexId AS NVARCHAR) + '));';
+
+        PRINT 'Warming Table: ' + @TableName + ' (Reading Base Data Pages...)';
+
+        -- 4. Execute the read
+        EXEC sp_executesql @Sql;
+
+        FETCH NEXT FROM cur_Warming INTO @TableName, @IndexId;
+    END
+
+    CLOSE cur_Warming;
+    DEALLOCATE cur_Warming;
+
+    PRINT 'Buffer warming completed safely.';
 END
+
+
+---
+/*
+Warming data for the last 7 days by 'Math Estimation' and 'Key Lookups'
+
+1. Calculate Average Row Size: Get the total size of the table and divide by total rows to get the Average Bytes Per Row.
+
+2. Count Recent Rows: Run a lightning-fast COUNT(*) on the last 7 days (using a Non-Clustered Index). Multiply that by the Average Row Size to estimate the Subset Size in MB.
+
+3. Force a Key Lookup: We remove the INDEX(1) hint. Instead, we select a random, non-indexed column. This forces SQL Server to seek the dates in the small index, and then do a Key Lookup to drag only those specific data pages into the Buffer Pool.
+
+*/
+
+    DECLARE @MaxTableSizeMB INT = 10000; -- Max size we are willing to put in RAM (10 GB)
+    DECLARE @DaysToWarm INT = -7;        -- Last 7 days
+    DECLARE @TargetDate DATETIME = DATEADD(DAY, @DaysToWarm, GETDATE());
+
+    -- We now need to map the Table Name to its Date Column!
+    DECLARE @HotTables TABLE (
+        PriorityID INT IDENTITY(1,1), 
+        TableName NVARCHAR(128),
+        DateColumnName NVARCHAR(128)
+    );
+
+    INSERT INTO @HotTables (TableName, DateColumnName)
+    VALUES 
+        ('Transaction_History', 'TransactionDate'), 
+        ('Transaction_Lines',   'CreatedOn'),
+        ('Batches_Processed',   'BatchDate');
+
+    -- =========================================================================
+    -- SCRIPT LOGIC
+    -- =========================================================================
+    DECLARE @TableName NVARCHAR(128), @DateCol NVARCHAR(128), @PayloadCol NVARCHAR(128);
+    DECLARE @Sql NVARCHAR(MAX);
+    DECLARE @TotalRows BIGINT, @TotalMB BIGINT;
+    DECLARE @RecentRows BIGINT, @EstimatedSubsetMB BIGINT;
+
+    DECLARE cur_Warming CURSOR LOCAL FAST_FORWARD FOR 
+        SELECT TableName, DateColumnName 
+        FROM @HotTables ORDER BY PriorityID ASC;
+
+    OPEN cur_Warming;
+    FETCH NEXT FROM cur_Warming INTO @TableName, @DateCol;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        PRINT '--------------------------------------------------------------'
+        PRINT 'Analyzing: [' + @TableName + '] for dates >= ' + CONVERT(VARCHAR, @TargetDate, 120)
+  
+    -- 1. Get TOTAL Rows and TOTAL Size to calculate Average Row Size
+    SELECT 
+        @TotalRows = ISNULL(SUM(rows), 1), -- default to 1 to prevent divide by zero
+        @TotalMB = ISNULL(SUM(used_page_count) * 8 / 1024, 0)
+    FROM sys.dm_db_partition_stats
+    WHERE object_id = OBJECT_ID(@TableName) AND index_id IN (0, 1);
+
+    -- 2. Count how many rows exist in the last 7 days
+    SET @Sql = N'SELECT @CountOUT = COUNT(*) FROM [' + @TableName + '] (NOLOCK) WHERE [' + @DateCol + '] >= @TDate';
+    EXEC sp_executesql @Sql, N'@TDate DATETIME, @CountOUT BIGINT OUTPUT', @TargetDate, @RecentRows OUTPUT;
+
+    -- 3. MATH: Estimate the size of the 7-day subset
+    -- (TotalMB / TotalRows) = Avg MB per row. Multiplied by RecentRows.
+    SET @EstimatedSubsetMB = (@TotalMB * 1.0 / NULLIF(@TotalRows, 0)) * @RecentRows;
+
+    PRINT '   Total Table Size: ' + CAST(@TotalMB AS NVARCHAR) + ' MB (' + CAST(@TotalRows AS NVARCHAR) + ' rows)'
+    PRINT '   7-Day Subset Size: ' + CAST(@EstimatedSubsetMB AS NVARCHAR) + ' MB (' + CAST(@RecentRows AS NVARCHAR) + ' rows)'
+
+    -- 4. PRIORITY/SAFETY CHECK
+    IF @EstimatedSubsetMB > @MaxTableSizeMB
+    BEGIN
+        PRINT '   >> SKIPPED: The 7-day subset exceeds the safety limit of ' + CAST(@MaxTableSizeMB AS NVARCHAR) + ' MB.'
+    END
+    ELSE IF @RecentRows = 0
+    BEGIN
+        PRINT '   >> SKIPPED: No data found in the last ' + CAST(ABS(@DaysToWarm) AS NVARCHAR) + ' days.'
+    END
+    ELSE
+    BEGIN
+        PRINT '   >> WARMING: Loading 7-day subset into Buffer...'
+        
+        -- 5. THE TRICK: Dynamically grab a column that is NOT the date column.
+        -- Selecting a column not in the date index forces SQL to read the base data page (Key Lookup)
+        SELECT TOP 1 @PayloadCol = name 
+        FROM sys.columns 
+        WHERE object_id = OBJECT_ID(@TableName) AND name <> @DateCol;
+
+        -- We do NOT use INDEX(1) here. We let the optimizer use the Date index, 
+        -- but force it to pull @PayloadCol out of the base table.
+        SET @Sql = N'DECLARE @Dummy BIGINT; ' + 
+                   N'SELECT @Dummy = COUNT_BIG([' + @PayloadCol + ']) ' + 
+                   N'FROM [' + @TableName + '] WITH (NOLOCK) ' + 
+                   N'WHERE [' + @DateCol + '] >= @TDate;';
+        
+        EXEC sp_executesql @Sql, N'@TDate DATETIME', @TargetDate;
+        PRINT '   >> Completed.'
+    END
+
 
 
 
